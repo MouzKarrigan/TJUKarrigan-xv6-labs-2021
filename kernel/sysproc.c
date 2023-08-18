@@ -95,3 +95,12 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+//trace 函数的具体实现
+uint64 sys_trace(void)
+{
+    int mask;
+    argint(0, &mask);
+    myproc()->mask = mask;
+    return 0;
+}

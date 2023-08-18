@@ -302,6 +302,7 @@ fork(void)
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
+/*   safestrcpy(np->mask, p->mask, sizeof(p->mask)); */
 
   pid = np->pid;
 

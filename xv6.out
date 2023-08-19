@@ -221,4 +221,4 @@ test sbrklast: OK
 test sbrk8000: OK
 test badarg: OK
 ALL TESTS PASSED
-$ qemu-system-riscv64: terminating on signal 15 from pid 29157 (make)
+$ qemu-system-riscv64: terminating on signal 15 from pid 89861 (make)

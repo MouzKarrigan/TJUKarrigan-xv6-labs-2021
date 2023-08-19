@@ -425,24 +425,38 @@ int copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
 void vmprint(pagetable_t pgtbl, int level)
 {
-    // there are 2^9 = 512 PTEs in a page table.
+    // 遍历一个页表中的512个PTE项
     for (int i = 0; i < 512; i++) {
-
+        // 获取当前PTE
         pte_t pte = pgtbl[i];
+
+        // 判断当前PTE是否有效，且不包含读、写、执行权限（PTE_R、PTE_W、PTE_X均为0）
         if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
-            // this PTE points to a lower-level page table.
+            // 当前PTE指向更低层次的页表页
             uint64 child = PTE2PA(pte);
+
+            // 根据深度level缩进打印
             for (int j = 0; j < level; j++) {
                 printf("..");
             }
+            
+            // 打印当前PTE的信息，包括索引、PTE值、PTE对应的物理地址
             printf("%d: pte %p pa %p\n", i, pte, child);
+            
+            // 递归打印更低层次的页表页
             vmprint((pagetable_t)child, level + 1);
         }
+        // 判断当前PTE是否有效
         else if (pte & PTE_V) {
+            // 当前PTE指向一个页表项对应的物理地址
             uint64 child = PTE2PA(pte);
+
+            // 根据深度level缩进打印
             for (int j = 0; j < level; j++) {
                 printf("..");
             }
+            
+            // 打印当前PTE的信息，包括索引、PTE值、PTE对应的物理地址
             printf("%d: pte %p pa %p\n", i, pte, child);
         }
     }

@@ -66,39 +66,50 @@ uint64 sys_sleep(void)
 #define PGACCESS_MAX_PAGE 32
 int sys_pgaccess(void)
 {
-    // lab pgtbl: your code here.
-    uint64 va, buf;
-    int pgnum;
-    argaddr(0, &va);
-    argint(1, &pgnum);
-    argaddr(2, &buf);
+    // 从用户态获取参数
+    uint64 va, buf; // 起始虚拟地址和结果缓冲区的用户地址
+    int pgnum; // 要检查的页面数量
+    argaddr(0, &va); // 获取第一个参数：起始虚拟地址
+    argint(1, &pgnum); // 获取第二个参数：页面数量
+    argaddr(2, &buf); // 获取第三个参数：结果缓冲区
 
+    // 如果页面数量大于PGACCESS_MAX_PAGE，将其截断为最大值
     if (pgnum > PGACCESS_MAX_PAGE)
         pgnum = PGACCESS_MAX_PAGE;
 
+    // 获取当前进程
     struct proc *p = myproc();
     if (!p) {
-        return -1;
+        return -1; // 如果进程不存在，返回错误
     }
 
+    // 获取当前进程的页表
     pagetable_t pgtbl = p->pagetable;
     if (!pgtbl) {
-        return -1;
+        return -1; // 如果页表不存在，返回错误
     }
 
+    // 初始化位掩码为0
     uint64 mask = 0;
+
+    // 遍历要检查的页面数量
     for (int i = 0; i < pgnum; i++) {
+        // 获取当前虚拟地址对应的页表项
         pte_t *pte = walk(pgtbl, va + i * PGSIZE, 0);
+
+        // 如果页表项表明页面已被访问（PTE_A标志位）
         if (*pte & PTE_A) {
-            *pte &= (~PTE_A); // 复位
-            mask |= (1 << i); // 标注第i个页是否被访问过
+            *pte &= (~PTE_A); // 复位PTE_A标志位
+            mask |= (1 << i); // 标记位掩码中的第i位为1，表示第i个页被访问过
         }
     }
 
+    // 将位掩码拷贝到用户空间的结果缓冲区中
     copyout(p->pagetable, buf, (char *)&mask, sizeof(mask));
 
-    return 0;
+    return 0; // 返回成功
 }
+
 #endif
 
 uint64 sys_kill(void)

@@ -112,5 +112,8 @@ struct proc {
     struct inode *cwd;           // Current directory
     char name[16];               // Process name (debugging)
 
-    struct usyscall *usys; // 物理存储空间
+    int interval;                      // 间隔
+    int ticks;                         // Tick数
+    uint64 handler;                    // 处理函数
+    struct trapframe *trapframe_saved; // 用来保存和还原寄存器状态
 };

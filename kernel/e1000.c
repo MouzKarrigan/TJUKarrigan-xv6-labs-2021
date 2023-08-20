@@ -93,63 +93,59 @@ void e1000_init(uint32 *xregs)
 
 int e1000_transmit(struct mbuf *m)
 {
-    // 对于包m，将其放入发送环中等待
-    // tx_mbufs 发送缓冲区
-    // tx_ring 发送环缓冲区
-    // E1000_TDT 发送环索引
-    // E1000_TXD_STAT_DD 发送环状态位，表示该数据包已经发送完毕
+    // 将数据包m放入发送环缓冲区，准备发送
 
-    acquire(&e1000_lock); // 锁
+    acquire(&e1000_lock); // 获取锁，确保发送操作的原子性
 
-    int index = regs[E1000_TDT]; // 读取E1000_TDT控制寄存器，获取下一个数据包的TX环索引
+    int index = regs[E1000_TDT]; // 获取当前的发送环索引
 
-    if ((tx_ring[index].status & E1000_TXD_STAT_DD) == 0) { // 仍在发送
-        release(&e1000_lock);
-        return -1;
+    if ((tx_ring[index].status & E1000_TXD_STAT_DD) == 0) { // 检查上一个数据包是否已发送完
+        release(&e1000_lock); // 释放锁
+        return -1; // 上一个数据包还在发送中，无法发送新包
     }
 
-    if (tx_mbufs[index]) // 释放上一个数据包
+    if (tx_mbufs[index]) // 释放之前保存的数据包的mbuf结构
         mbuffree(tx_mbufs[index]);
 
-    tx_mbufs[index] = m;
-    tx_ring[index].length = m->len;
-    tx_ring[index].addr = (uint64)m->head;
+    tx_mbufs[index] = m; // 保存当前数据包的mbuf结构
+    tx_ring[index].length = m->len; // 设置数据包长度
+    tx_ring[index].addr = (uint64)m->head; // 设置数据包在内存中的物理地址
 
-    // E1000_TXD_CMD_RS表示报告状态位，表示当发送完该数据包时会产生一个中断报告状态
-    // E1000_TXD_CMD_EOP表示结束位，表示这是该数据包的最后一个描述符。
+    // 设置命令标志：E1000_TXD_CMD_RS表示报告状态位，E1000_TXD_CMD_EOP表示结束位
     tx_ring[index].cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
 
-    // 更新E1000_TDT控制寄存器，指向下一个数据包的发送环索引
-    // 因其是一个环状结构，故取模
-
+    // 更新E1000_TDT控制寄存器，指向下一个数据包的发送环索引（环状结构，取模操作）
     regs[E1000_TDT] = (index + 1) % TX_RING_SIZE;
-    release(&e1000_lock);
-    return 0;
+
+    release(&e1000_lock); // 释放锁
+    return 0; // 发送成功
 }
 
 static void e1000_recv(void)
 {
-    // 遍历发送环状缓冲区, 把其中所有的Packet交由网络上层处理
-    while (1) {
+    // 接收处理函数，将接收到的数据包交由网络上层处理
 
-        int index = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+    while (1) {
+        int index = (regs[E1000_RDT] + 1) % RX_RING_SIZE; // 获取下一个接收环索引
 
         if ((rx_ring[index].status & E1000_RXD_STAT_DD) == 0) {
-            // 已处理完
+            // 数据包还未接收完毕，退出循环等待
             return;
         }
-        rx_mbufs[index]->len = rx_ring[index].length;
 
-        // 向上传输
+        rx_mbufs[index]->len = rx_ring[index].length; // 设置接收到的数据包长度
+
+        // 将数据包交给网络上层处理
         net_rx(rx_mbufs[index]);
 
-        // 置空
-        rx_mbufs[index] = mbufalloc(0);
-        rx_ring[index].status = 0;
-        rx_ring[index].addr = (uint64)rx_mbufs[index]->head;
-        regs[E1000_RDT] = index;
+        // 清空接收环描述符
+        rx_mbufs[index] = mbufalloc(0); // 重新分配一个mbuf结构
+        rx_ring[index].status = 0; // 清空状态标志
+        rx_ring[index].addr = (uint64)rx_mbufs[index]->head; // 设置接收缓冲区地址
+        regs[E1000_RDT] = index; // 更新接收环索引
     }
 }
+
 
 void e1000_intr(void)
 {

@@ -92,15 +92,16 @@ void thread_create(void (*func)())
 {
     struct thread *t;
 
+    // 查找空闲的线程结构体
     for (t = all_thread; t < all_thread + MAX_THREAD; t++) {
         if (t->state == FREE)
             break;
     }
     t->state = RUNNABLE;
-    // YOUR CODE HERE
-
-    t->context.ra = (uint64)func;                    // 执行传入的函数（thread_switch）
-    t->context.sp = (uint64)(t->stack + STACK_SIZE); // 复制栈顶的stack pointer
+    
+    // 设置新线程的执行上下文
+    t->context.ra = (uint64)func;                    // 设置函数入口地址
+    t->context.sp = (uint64)(t->stack + STACK_SIZE); // 设置栈顶指针
 }
 
 void thread_yield(void)

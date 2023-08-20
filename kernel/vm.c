@@ -296,23 +296,31 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     uint64 pa, i;
     uint flags;
 
+    // 遍历所有需要复制的页
     for (i = 0; i < sz; i += PGSIZE) {
+        // 检查原页表中的 PTE 是否存在
         if ((pte = walk(old, i, 0)) == 0)
             panic("uvmcopy: pte should exist");
+        
+        // 检查原页表中的 PTE 是否被映射
         if ((*pte & PTE_V) == 0)
             panic("uvmcopy: page not present");
 
+        // 获取原页表中的物理地址
         pa = PTE2PA(*pte);
 
-        *pte = (*pte & ~PTE_W) | PTE_COW; // 将所有的pte的写权限都设置为0，PTE_COW设置为1
+        // 将原 PTE 的写权限设置为0，设置 PTE_COW 为1
+        *pte = (*pte & ~PTE_W) | PTE_COW;
 
+        // 获取 PTE 的标志位
         flags = PTE_FLAGS(*pte);
 
+        // 将物理页面映射到新页表中
         if (mappages(new, i, PGSIZE, pa, flags) != 0) {
             goto err;
         }
 
-        // 索引计数加1
+        // 增加物理页面的引用计数
         if (AddPGRefCount((void *)pa)) {
             goto err;
         }
@@ -320,6 +328,7 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     return 0;
 
 err:
+    // 如果出错，解除新页表的映射并返回错误码
     uvmunmap(new, 0, i / PGSIZE, 1);
     return -1;
 }
@@ -344,26 +353,26 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     uint64 n, va0, pa0;
 
     while (len > 0) {
-        va0 = PGROUNDDOWN(dstva);
-        pa0 = walkaddr(pagetable, va0);
+        va0 = PGROUNDDOWN(dstva); // 将目标虚拟地址向下对齐到页面边界
+        pa0 = walkaddr(pagetable, va0); // 获取虚拟地址对应的物理地址
 
-        // 若是COW页，则要分配新的物理页再复制
+        // 若是 COW 页，则要分配新的物理页再复制
         if (isCOWPG(pagetable, va0) == 1) {
-            pa0 = (uint64)allocCOWPG(pagetable, va0);
+            pa0 = (uint64)allocCOWPG(pagetable, va0); // 分配新的物理页
         }
 
         if (pa0 == 0)
-            return -1;
-        n = PGSIZE - (dstva - va0);
+            return -1; // 物理页不存在，返回错误标志
+        n = PGSIZE - (dstva - va0); // 计算需要复制的字节数
         if (n > len)
-            n = len;
-        memmove((void *)(pa0 + (dstva - va0)), src, n);
+            n = len; // 如果需要复制的字节数大于剩余的字节数，调整为剩余字节数
+        memmove((void *)(pa0 + (dstva - va0)), src, n); // 将数据从源地址复制到目标地址
 
-        len -= n;
-        src += n;
-        dstva = va0 + PGSIZE;
+        len -= n; // 更新剩余字节数
+        src += n; // 更新源地址
+        dstva = va0 + PGSIZE; // 更新目标虚拟地址
     }
-    return 0;
+    return 0; // 复制完成，返回成功标志
 }
 
 // Copy from user to kernel.

@@ -226,15 +226,26 @@ int devintr()
 
 int isCOWPG(pagetable_t pg, uint64 va)
 {
+    // 检查虚拟地址是否超出最大值
     if (va > MAXVA)
         return -1;
+
+    // 获取虚拟地址对应的 PTE
     pte_t *pte = walk(pg, va, 0);
+
+    // 如果 PTE 不存在，表示没有对应的页面
     if (pte == 0)
         return 0;
+
+    // 如果 PTE 不是有效的页面
     if ((*pte & PTE_V) == 0)
         return 0;
+
+    // 如果 PTE 的 COW 标志位被设置，表示是 Copy-on-Write 页面
     if ((*pte & PTE_COW))
         return 1;
+
+    // 不是 Copy-on-Write 页面
     return 0;
 }
 

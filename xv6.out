@@ -1,8 +1,8 @@
 
 xv6 kernel is booting
 
-hart 1 starting
 hart 2 starting
+hart 1 starting
 init: starting sh
 $ usertests -q
 usertests starting
@@ -71,4 +71,4 @@ test sbrklast: OK
 test sbrk8000: OK
 test badarg: OK
 ALL TESTS PASSED
-$ qemu-system-riscv64: terminating on signal 15 from pid 43842 (make)
+$ qemu-system-riscv64: terminating on signal 15 from pid 31884 (make)

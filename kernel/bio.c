@@ -44,26 +44,27 @@ struct {
 
 void binit(void)
 {
+    // 初始化整个块缓存结构
     initlock(&bcache.lock, "bcache_lock");
 
-    // 初始化bucket
+    // 初始化每个bucket的锁和链表头
     char name[32];
     for (int i = 0; i < NBUCKET; i++) {
         snprintf(name, 32, "bucket_lock_%d", i);
         initlock(&bcache.bucket_locks[i], name);
-        bcache.bucket[i].next = 0;
+        bcache.bucket[i].next = 0; // 链表头指针初始化为NULL
     }
 
-    // 初始化buffer
+    // 初始化每个buffer
     for (int i = 0; i < NBUF; i++) {
-        struct buf *b = &bcache.buf[i]; // 链表头指针
-        initsleeplock(&b->lock, "buffer");
+        struct buf *b = &bcache.buf[i]; // 获取当前buffer的指针
+        initsleeplock(&b->lock, "buffer"); // 初始化buffer的睡眠锁，用于保护对buffer的并发访问
 
-        b->LUtime = 0;
-        b->refcnt = 0;
-        b->curBucket = 0;
+        b->LUtime = 0; // 上次被访问的时间戳，初始为0
+        b->refcnt = 0; // 引用计数，初始为0，表示当前没有进程在使用该buffer
+        b->curBucket = 0; // 当前所在的bucket索引，初始为0
 
-        // 将buffer加入到bucket[0]中
+        // 将buffer加入到bucket[0]中，即初始化的时候将所有buffer放入第一个bucket中
         b->next = bcache.bucket[0].next;
         bcache.bucket[0].next = b;
     }
@@ -74,116 +75,98 @@ void binit(void)
 // In either case, return locked buffer.
 static struct buf *bget(uint dev, uint blockno)
 {
+    uint index = hash(dev, blockno); // 计算哈希索引
 
-    uint index = hash(dev, blockno);
+    acquire(&bcache.bucket_locks[index]); // 获取当前bucket的锁
+    struct buf *b = bcache.bucket[index].next; // 获取当前bucket的第一个块
 
-    acquire(&bcache.bucket_locks[index]);
-    struct buf *b = bcache.bucket[index].next;
-
-    // 在当前bucket[index]中查找
+    // 在当前bucket中查找指定的块
     while (b) {
         if (b->dev == dev && b->blockno == blockno) {
-            // 已找到
-            b->refcnt++;
-            release(&bcache.bucket_locks[index]);
-            acquiresleep(&b->lock);
-            return b;
+            // 如果找到了指定块
+            b->refcnt++; // 块的引用计数加一
+            release(&bcache.bucket_locks[index]); // 释放当前bucket的锁
+            acquiresleep(&b->lock); // 获取块的sleep锁，确保不会被其他线程并发访问
+            return b; // 返回找到的块
         }
-        b = b->next;
+        b = b->next; // 继续遍历bucket中的块
     }
 
-    // 未找到，需要从其他bucket中查找
-    // 占有bucket_lock时, 再获取其他bucket锁是不安全的, 同时占有多个bucket锁
-    // 容易导致循环等待造成死锁，故先释放当前bucket锁
+    // 在当前bucket中未找到指定块，需要检查其他bucket
+    // 在检查其他bucket时，不可以同时持有多个bucket的锁，需要先释放当前bucket的锁
     release(&bcache.bucket_locks[index]);
 
-    // 因其他进程可能使用使用该块，因此要检查一遍该block是否已经在其他bucket中
-    // 如果已经在其他bucket中，则等待获取sleeplock再返回即可
-    acquire(&bcache.lock);
-    b = bcache.bucket[index].next;
+    acquire(&bcache.lock); // 获取整个bcache的锁
+    b = bcache.bucket[index].next; // 获取当前bucket的第一个块
+
     while (b) {
         if (b->dev == dev && b->blockno == blockno) {
-            // 已被其他进程放入其他bucket中
-            acquire(&bcache.bucket_locks[index]);
-            b->refcnt++;
-            release(&bcache.bucket_locks[index]);
-            release(&bcache.lock); // 释放bcache锁
+            // 如果找到了指定块，但在其他bucket中
+            acquire(&bcache.bucket_locks[index]); // 获取当前bucket的锁
+            b->refcnt++; // 块的引用计数加一
+            release(&bcache.bucket_locks[index]); // 释放当前bucket的锁
+            release(&bcache.lock); // 释放整个bcache的锁
 
-            // 重新获取该block的锁，睡眠等待即可，等待完毕便可返回
-            acquiresleep(&b->lock);
+            acquiresleep(&b->lock); // 获取块的sleep锁，确保不会被其他线程并发访问
             return b;
         }
-        b = b->next;
+        b = b->next; // 继续遍历bucket中的块
     }
 
-    // 若还未找到，需要依据LRU从其他bucket中查找
-    // 在当前bucket[index]中查找空闲缓冲区或者最近最少使用的缓冲区
-    struct buf *LRUb = 0;
-    uint curBucket = -1;
-    uint LUtime = INTMAX;
+    // 如果在其他bucket中也未找到，需要根据LRU策略查找一个最适合替换的块
+    struct buf *LRUb = 0; // 用于记录最适合替换的块
+    uint curBucket = -1; // 当前的bucket索引
+    uint LUtime = INTMAX; // 最早的使用时间
 
     for (int i = 0; i < NBUCKET; i++) {
-        acquire(&bcache.bucket_locks[i]);
-
-        b = &bcache.bucket[i];
-        int found = 0;
+        acquire(&bcache.bucket_locks[i]); // 获取当前bucket的锁
+        b = &bcache.bucket[i]; // 获取当前bucket的链表头
+        int found = 0; // 标志是否找到合适的块
 
         while (b->next) {
-            if (b->next->refcnt == 0 && LRUb == 0) {
-                // 如果找到空闲缓冲区且之前还没有找到过空闲缓冲区
-                LRUb = b;
-                LUtime = b->next->LUtime;
+            if (b->next->refcnt == 0 && (LRUb == 0 || b->next->LUtime < LUtime)) {
+                // 找到一个空闲的块，或者找到更早未使用的块
+                LRUb = b; // 更新LRUb
+                LUtime = b->next->LUtime; // 更新最早使用时间
                 found = 1;
             }
-            else if (b->next->refcnt == 0 && b->next->LUtime < LUtime) {
-                // 如果找到空闲缓冲区，且该缓冲区上次使用时间更早
-                LRUb = b;
-                LUtime = b->next->LUtime;
-                found = 1;
-            }
-            b = b->next;
+            b = b->next; // 继续遍历bucket中的块
         }
+
         if (found) {
-            // 更新了LRUb，要释放这个桶之前的bucket锁
             if (curBucket != -1) {
-                // 释放之前的bucket锁
-                release(&bcache.bucket_locks[curBucket]);
+                release(&bcache.bucket_locks[curBucket]); // 释放之前的bucket锁
             }
-            curBucket = i;
-        }
-        else {
-            // 没找到，释放访问的桶
-            release(&bcache.bucket_locks[i]);
+            curBucket = i; // 更新当前bucket索引
+        } else {
+            release(&bcache.bucket_locks[i]); // 释放当前bucket的锁
         }
     }
-    if (LRUb == 0) { // 最终都没有找到一个buffer
-        panic("bget: No buffer.");
-    }
-    else {
-        struct buf *p = LRUb->next;
+
+    if (LRUb == 0) {
+        panic("bget: No buffer."); // 所有块都在使用中，无法分配新的块
+    } else {
+        struct buf *p = LRUb->next; // 获取要替换的块
 
         if (curBucket != index) {
-            // 删除LRUb节点
-            LRUb->next = p->next;
-            release(&bcache.bucket_locks[curBucket]);
+            LRUb->next = p->next; // 从其他bucket中删除p
+            release(&bcache.bucket_locks[curBucket]); // 释放之前的bucket锁
 
-            // 将LRUb节点放入当前bucket[index]中
-            acquire(&bcache.bucket_locks[index]);
-            p->next = bcache.bucket[index].next;
+            acquire(&bcache.bucket_locks[index]); // 获取当前bucket的锁
+            p->next = bcache.bucket[index].next; // 将p插入当前bucket的链表头
             bcache.bucket[index].next = p;
         }
 
-        // 更新LRUb的信息
         p->dev = dev;
         p->blockno = blockno;
         p->refcnt = 1;
         p->valid = 0;
         p->curBucket = index;
 
-        release(&bcache.bucket_locks[index]); // 释放bucket[index]锁
-        release(&bcache.lock);                // 释放bcache锁
-        acquiresleep(&p->lock);               // 获取LRUb的锁
-        return p;
+        release(&bcache.bucket_locks[index]); // 释放当前bucket的锁
+        release(&bcache.lock); // 释放整个bcache的锁
+        acquiresleep(&p->lock); // 获取p块的sleep锁
+        return p; // 返回要分配的块
     }
 }
 

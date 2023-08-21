@@ -25,13 +25,13 @@ struct {
 
 void kinit()
 {
-    // 每个CPU列表初始化
+    // 初始化每个CPU的自由列表
     char kmem_name[32];
     for (int i = 0; i < NCPU; i++) {
-        snprintf(kmem_name, 32, "kmem_%d", i);
-        initlock(&kmem[i].lock, kmem_name);
+        snprintf(kmem_name, 32, "kmem_%d", i); // 创建每个CPU对应的内存锁的名称
+        initlock(&kmem[i].lock, kmem_name); // 初始化每个CPU对应的内存锁
     }
-    freerange(end, (void *)PHYSTOP);
+    freerange(end, (void *)PHYSTOP); // 设置内存可分配范围
 }
 
 void freerange(void *pa_start, void *pa_end)
@@ -50,10 +50,11 @@ void kfree(void *pa)
 {
     struct run *r;
 
+    // 检查是否满足释放条件，否则引发panic
     if (((uint64)pa % PGSIZE) != 0 || (char *)pa < end || (uint64)pa >= PHYSTOP)
         panic("kfree");
 
-    // Fill with junk to catch dangling refs.
+    // 用垃圾填充以捕获悬空引用。
     memset(pa, 1, PGSIZE);
 
     r = (struct run *)pa;
@@ -79,36 +80,38 @@ void *kalloc(void)
 {
     struct run *r;
 
-    push_off();
-    int CPUID = cpuid();
-    acquire(&kmem[CPUID].lock);
+    push_off(); // 关闭中断
 
-    r = kmem[CPUID].freelist;
+    // 获取当前CPU的ID
+    int CPUID = cpuid();
+    acquire(&kmem[CPUID].lock); // 获取当前CPU的kmem锁
+
+    r = kmem[CPUID].freelist; // 从当前CPU的空闲列表获取一个页
 
     // 在当前CPU上查找空闲页
     if (r)
-        kmem[CPUID].freelist = r->next;
+        kmem[CPUID].freelist = r->next; // 移除已分配的空闲页
 
     if (r == 0) { // 若当前CPU上没有空闲页
         // 在其他CPU上查找空闲页
         for (int i = 0; i < NCPU; i++) {
             if (i == CPUID)
-                continue;
+                continue; // 跳过当前CPU
             // 要获取其他CPU的锁
-            acquire(&kmem[i].lock);
-            r = kmem[i].freelist;
+            acquire(&kmem[i].lock); // 获取其他CPU的kmem锁
+            r = kmem[i].freelist; // 从其他CPU的空闲列表获取一个页
             if (r)
-                kmem[i].freelist = r->next;
-            release(&kmem[i].lock);
-            if (r) // 已找到，脱出循环
+                kmem[i].freelist = r->next; // 移除已分配的空闲页
+            release(&kmem[i].lock); // 释放其他CPU的kmem锁
+            if (r) // 若找到空闲页，脱离循环
                 break;
         }
     }
 
-    release(&kmem[CPUID].lock);
-    pop_off();
+    release(&kmem[CPUID].lock); // 释放当前CPU的kmem锁
+    pop_off(); // 恢复中断
 
     if (r)
-        memset((char *)r, 5, PGSIZE); // fill with junk
-    return (void *)r;
+        memset((char *)r, 5, PGSIZE); // 用垃圾填充，以捕捉悬空引用
+    return (void *)r; // 返回分配的物理页
 }
